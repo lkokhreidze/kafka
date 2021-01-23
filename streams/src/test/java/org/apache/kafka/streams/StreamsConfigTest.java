@@ -982,6 +982,19 @@ public class StreamsConfigTest {
         assertThrows(ConfigException.class, () -> new StreamsConfig(props));
     }
 
+    @Test
+    public void shouldDefaultToNullIfRackIdIsNotSpecified() {
+        final StreamsConfig streamsConfig = new StreamsConfig(props);
+        assertNull(streamsConfig.getString(StreamsConfig.RACK_ID_CONFIG));
+    }
+
+    @Test
+    public void shouldAllowToSpecifyRackId() {
+        props.put(StreamsConfig.RACK_ID_CONFIG, "cluster-1");
+        final StreamsConfig config = new StreamsConfig(props);
+        assertEquals(config.getString(StreamsConfig.RACK_ID_CONFIG), "cluster-1");
+    }
+
     static class MisconfiguredSerde implements Serde<Object> {
         @Override
         public void configure(final Map<String, ?>  configs, final boolean isKey) {
