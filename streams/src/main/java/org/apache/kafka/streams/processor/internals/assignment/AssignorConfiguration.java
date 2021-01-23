@@ -190,6 +190,10 @@ public final class AssignorConfiguration {
         }
     }
 
+    public String rackId() {
+        return streamsConfig.getString(StreamsConfig.RACK_ID_CONFIG);
+    }
+
     public InternalTopicManager internalTopicManager() {
         return new InternalTopicManager(referenceContainer.time, referenceContainer.adminClient, streamsConfig);
     }

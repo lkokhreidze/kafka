@@ -189,6 +189,8 @@ public class StreamsPartitionAssignor implements ConsumerPartitionAssignor, Conf
     private Supplier<TaskAssignor> taskAssignorSupplier;
     private byte uniqueField;
 
+    private String rackId;
+
     /**
      * We need to have the PartitionAssignor and its StreamThread to be mutually accessible since the former needs
      * later's cached metadata while sending subscriptions, and the latter needs former's returned assignment when
@@ -220,6 +222,7 @@ public class StreamsPartitionAssignor implements ConsumerPartitionAssignor, Conf
         rebalanceProtocol = assignorConfiguration.rebalanceProtocol();
         taskAssignorSupplier = assignorConfiguration::taskAssignor;
         assignmentListener = assignorConfiguration.assignmentListener();
+        rackId = assignorConfiguration.rackId();
         uniqueField = 0;
     }
 
