@@ -37,6 +37,7 @@ import org.slf4j.LoggerFactory;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -85,7 +86,8 @@ public class SubscriptionInfo {
                             final String userEndPoint,
                             final Map<TaskId, Long> taskOffsetSums,
                             final byte uniqueField,
-                            final int errorCode) {
+                            final int errorCode,
+                            final String rackId) {
         validateVersions(version, latestSupportedVersion);
         final SubscriptionInfoData data = new SubscriptionInfoData();
         data.setVersion(version);
@@ -93,9 +95,7 @@ public class SubscriptionInfo {
                 processId.getLeastSignificantBits()));
 
         if (version >= 2) {
-            data.setUserEndPoint(userEndPoint == null
-                                     ? new byte[0]
-                                     : userEndPoint.getBytes(StandardCharsets.UTF_8));
+            data.setUserEndPoint(convertToBytesOrDefault(userEndPoint));
         }
         if (version >= 3) {
             data.setLatestSupportedVersion(latestSupportedVersion);
@@ -105,6 +105,9 @@ public class SubscriptionInfo {
         }
         if (version >= 9) {
             data.setErrorCode(errorCode);
+        }
+        if (version >= 10) {
+            data.setRackId(convertToBytesOrDefault(rackId));
         }
 
         this.data = data;
@@ -123,6 +126,10 @@ public class SubscriptionInfo {
 
     public int errorCode() {
         return data.errorCode();
+    }
+
+    private static byte[] convertToBytesOrDefault(final String value) {
+        return value == null ? new byte[0] : value.getBytes(StandardCharsets.UTF_8);
     }
 
     private void setTaskOffsetSumDataFromTaskOffsetSumMap(final Map<TaskId, Long> taskOffsetSums) {

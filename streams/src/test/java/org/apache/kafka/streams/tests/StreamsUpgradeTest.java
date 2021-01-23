@@ -161,8 +161,8 @@ public class StreamsUpgradeTest {
                     userEndPoint(),
                     taskManager.getTaskOffsetSums(),
                     uniqueField,
-                    0
-                ).encode();
+                    0,
+                    null).encode();
             } else {
                 return new FutureSubscriptionInfo(
                     usedSubscriptionMetadataVersion,
@@ -262,8 +262,8 @@ public class StreamsUpgradeTest {
                                 info.userEndPoint(),
                                 taskManager().getTaskOffsetSums(),
                                 (byte) 0,
-                                0
-                            ).encode(),
+                                0,
+                                null).encode(),
                             subscription.ownedPartitions()
                         ));
                 }

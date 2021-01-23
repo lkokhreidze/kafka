@@ -259,8 +259,8 @@ public class StreamsPartitionAssignor implements ConsumerPartitionAssignor, Conf
             userEndPoint,
             taskManager.getTaskOffsetSums(),
             uniqueField,
-            assignmentErrorCode.get()
-        ).encode();
+            assignmentErrorCode.get(),
+            rackId).encode();
     }
 
     private Map<String, Assignment> errorAssignment(final Map<UUID, ClientMetadata> clientsMetadata,
