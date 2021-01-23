@@ -244,6 +244,7 @@ public class StreamsPartitionAssignor implements ConsumerPartitionAssignor, Conf
         // 1. Client UUID (a unique id assigned to an instance of KafkaStreams)
         // 2. Map from task id to its overall lag
         // 3. Unique Field to ensure a rebalance when a thread rejoins by forcing the user data to be different
+        // 4. Kafka Streams rack ID
 
         handleRebalanceStart(topics);
         uniqueField++;

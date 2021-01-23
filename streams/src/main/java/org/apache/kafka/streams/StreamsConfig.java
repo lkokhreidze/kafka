@@ -469,6 +469,9 @@ public class StreamsConfig extends AbstractConfig {
         "recommended setting for production; for development you can change this, by adjusting broker setting " +
         "<code>transaction.state.log.replication.factor</code> and <code>transaction.state.log.min.isr</code>.";
 
+    public static final String RACK_ID_CONFIG = "rack.id";
+    private static final String RACK_ID_DOC = "An identifier for the rack of an instance of Kafka Streams.";
+
     /** {@code receive.buffer.bytes} */
     @SuppressWarnings("WeakerAccess")
     public static final String RECEIVE_BUFFER_CONFIG = CommonClientConfigs.RECEIVE_BUFFER_CONFIG;
