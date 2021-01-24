@@ -139,9 +139,12 @@ public class StreamsPartitionAssignor implements ConsumerPartitionAssignor, Conf
             state = new ClientState();
         }
 
-        void addConsumer(final String consumerMemberId, final List<TopicPartition> ownedPartitions) {
+        void addConsumer(final String consumerMemberId,
+                         final String rackId,
+                         final List<TopicPartition> ownedPartitions) {
             consumers.add(consumerMemberId);
             state.incrementCapacity();
+            state.assignRackId(rackId);
             state.addOwnedPartitions(ownedPartitions, consumerMemberId);
         }
 
@@ -260,7 +263,8 @@ public class StreamsPartitionAssignor implements ConsumerPartitionAssignor, Conf
             taskManager.getTaskOffsetSums(),
             uniqueField,
             assignmentErrorCode.get(),
-            rackId).encode();
+            rackId
+        ).encode();
     }
 
     private Map<String, Assignment> errorAssignment(final Map<UUID, ClientMetadata> clientsMetadata,
@@ -346,7 +350,7 @@ public class StreamsPartitionAssignor implements ConsumerPartitionAssignor, Conf
             }
 
             // add the consumer and any info in its subscription to the client
-            clientMetadata.addConsumer(consumerId, subscription.ownedPartitions());
+            clientMetadata.addConsumer(consumerId, info.rackId(), subscription.ownedPartitions());
             allOwnedPartitions.addAll(subscription.ownedPartitions());
             clientMetadata.addPreviousTasksAndOffsetSums(consumerId, info.taskOffsetSums());
         }
@@ -1339,6 +1343,7 @@ public class StreamsPartitionAssignor implements ConsumerPartitionAssignor, Conf
             case 7:
             case 8:
             case 9:
+            case 10:
                 validateActiveTaskEncoding(partitions, info, logPrefix);
 
                 activeTasks = getActiveTasks(partitions, info);

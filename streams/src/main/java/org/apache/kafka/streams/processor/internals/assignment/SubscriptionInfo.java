@@ -242,9 +242,15 @@ public class SubscriptionInfo {
     }
 
     public String userEndPoint() {
-        return data.userEndPoint() == null || data.userEndPoint().length == 0
-            ? null
-            : new String(data.userEndPoint(), StandardCharsets.UTF_8);
+        return decodeStringOrNull(data.userEndPoint());
+    }
+
+    public String rackId() {
+        return decodeStringOrNull(data.rackId());
+    }
+
+    private static String decodeStringOrNull(final byte[] data) {
+        return data == null || data.length == 0 ? null : new String(data, StandardCharsets.UTF_8);
     }
 
     public static Set<TaskId> getActiveTasksFromTaskOffsetSumMap(final Map<TaskId, Long> taskOffsetSums) {

@@ -27,10 +27,10 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static java.util.Collections.emptyMap;
 import static java.util.Collections.unmodifiableMap;
@@ -62,6 +62,7 @@ public class ClientState {
     private final Map<String, Set<TaskId>> consumerToRevokingActiveTaskIds = new TreeMap<>();
 
     private int capacity;
+    private String rackId;
 
     public ClientState() {
         this(0);
@@ -79,12 +80,14 @@ public class ClientState {
     public ClientState(final Set<TaskId> previousActiveTasks,
                        final Set<TaskId> previousStandbyTasks,
                        final Map<TaskId, Long> taskLagTotals,
-                       final int capacity) {
+                       final int capacity,
+                       final String rackId) {
         prevActiveTasks = unmodifiableSet(new TreeSet<>(previousActiveTasks));
         prevStandbyTasks = unmodifiableSet(new TreeSet<>(previousStandbyTasks));
         taskOffsetSums = emptyMap();
         this.taskLagTotals = unmodifiableMap(taskLagTotals);
         this.capacity = capacity;
+        this.rackId = rackId;
     }
 
     int capacity() {
@@ -186,6 +189,10 @@ public class ClientState {
         return standbyTasks.size();
     }
 
+    String rackId() {
+        return rackId;
+    }
+
     public void assignStandby(final TaskId task) {
         assertNotAssigned(task);
         standbyTasks.add(task);
@@ -275,6 +282,10 @@ public class ClientState {
         initializeRemainingPrevTasksFromTaskOffsetSums();
     }
 
+    public void assignRackId(final String rackId) {
+        this.rackId = rackId;
+    }
+
     /**
      * Compute the lag for each stateful task, including tasks this client did not previously have.
      */
@@ -355,7 +366,8 @@ public class ClientState {
 
     public String currentAssignment() {
         return "[activeTasks: (" + activeTasks +
-                ") standbyTasks: (" + standbyTasks + ")]";
+               ") standbyTasks: (" + standbyTasks +
+               ") rackId: (" + rackId + ")]";
     }
 
     @Override
@@ -367,6 +379,7 @@ public class ClientState {
             ") changelogOffsetTotalsByTask: (" + taskOffsetSums.entrySet() +
             ") taskLagTotals: (" + taskLagTotals.entrySet() +
             ") capacity: " + capacity +
+            ") rackId: " + rackId +
             " assigned: " + assignedTaskCount() +
             "]";
     }
