@@ -16,8 +16,6 @@
  */
 package org.apache.kafka.streams.processor.internals.assignment;
 
-import java.util.Collection;
-import java.util.Map.Entry;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.ListOffsetsResult;
 import org.apache.kafka.clients.admin.ListOffsetsResult.ListOffsetsResultInfo;
@@ -30,9 +28,11 @@ import org.hamcrest.BaseMatcher;
 import org.hamcrest.Description;
 import org.hamcrest.Matcher;
 
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
@@ -88,7 +88,8 @@ public final class AssignmentTestUtils {
     public static final Set<TaskId> EMPTY_TASKS = emptySet();
     public static final Map<TopicPartition, Long> EMPTY_CHANGELOG_END_OFFSETS = new HashMap<>();
 
-    private AssignmentTestUtils() {}
+    private AssignmentTestUtils() {
+    }
 
     static Map<UUID, ClientState> getClientStatesMap(final ClientState... states) {
         final Map<UUID, ClientState> clientStates = new HashMap<>();
@@ -128,7 +129,7 @@ public final class AssignmentTestUtils {
                                            final Set<TaskId> prevTasks,
                                            final Set<TaskId> standbyTasks) {
         return new SubscriptionInfo(
-	        LATEST_SUPPORTED_VERSION, LATEST_SUPPORTED_VERSION, processId, null, getTaskOffsetSums(prevTasks, standbyTasks), (byte) 0, 0, null);
+            LATEST_SUPPORTED_VERSION, LATEST_SUPPORTED_VERSION, processId, null, getTaskOffsetSums(prevTasks, standbyTasks), (byte) 0, 0, null);
     }
 
     public static SubscriptionInfo getInfo(final UUID processId,
@@ -136,7 +137,7 @@ public final class AssignmentTestUtils {
                                            final Set<TaskId> standbyTasks,
                                            final String userEndPoint) {
         return new SubscriptionInfo(
-	        LATEST_SUPPORTED_VERSION, LATEST_SUPPORTED_VERSION, processId, userEndPoint, getTaskOffsetSums(prevTasks, standbyTasks), (byte) 0, 0, null);
+            LATEST_SUPPORTED_VERSION, LATEST_SUPPORTED_VERSION, processId, userEndPoint, getTaskOffsetSums(prevTasks, standbyTasks), (byte) 0, 0, null);
     }
 
     public static SubscriptionInfo getInfo(final UUID processId,
@@ -144,7 +145,7 @@ public final class AssignmentTestUtils {
                                            final Set<TaskId> standbyTasks,
                                            final byte uniqueField) {
         return new SubscriptionInfo(
-	        LATEST_SUPPORTED_VERSION, LATEST_SUPPORTED_VERSION, processId, null, getTaskOffsetSums(prevTasks, standbyTasks), uniqueField, 0, null);
+            LATEST_SUPPORTED_VERSION, LATEST_SUPPORTED_VERSION, processId, null, getTaskOffsetSums(prevTasks, standbyTasks), uniqueField, 0, null);
     }
 
     // Stub offset sums for when we only care about the prev/standby task sets, not the actual offsets
@@ -458,10 +459,10 @@ public final class AssignmentTestUtils {
         @Override
         public String toString() {
             return "TaskSkewReport{" +
-                "maxTaskSkew=" + maxTaskSkew +
-                ", skewedSubtopologies=" + skewedSubtopologies +
-                ", subtopologyToClientsWithPartition=" + subtopologyToClientsWithPartition +
-                '}';
+                   "maxTaskSkew=" + maxTaskSkew +
+                   ", skewedSubtopologies=" + skewedSubtopologies +
+                   ", subtopologyToClientsWithPartition=" + subtopologyToClientsWithPartition +
+                   '}';
         }
     }
 }

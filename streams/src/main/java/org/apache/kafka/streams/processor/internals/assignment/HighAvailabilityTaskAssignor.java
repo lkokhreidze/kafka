@@ -16,12 +16,14 @@
  */
 package org.apache.kafka.streams.processor.internals.assignment;
 
+import org.apache.kafka.streams.RackStandbyTaskAssignor;
 import org.apache.kafka.streams.processor.TaskId;
 import org.apache.kafka.streams.processor.internals.Task;
 import org.apache.kafka.streams.processor.internals.assignment.AssignorConfiguration.AssignmentConfigs;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -33,6 +35,7 @@ import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -51,12 +54,13 @@ public class HighAvailabilityTaskAssignor implements TaskAssignor {
         final SortedSet<TaskId> statefulTasks = new TreeSet<>(statefulTaskIds);
         final TreeMap<UUID, ClientState> clientStates = new TreeMap<>(clients);
 
-        assignActiveStatefulTasks(clientStates, statefulTasks);
+        final Map<TaskId, String> assignedTaskRacks = assignActiveStatefulTasks(clientStates, statefulTasks);
 
         assignStandbyReplicaTasks(
             clientStates,
-            statefulTasks,
-            configs.numStandbyReplicas
+            assignedTaskRacks,
+            configs.numStandbyReplicas,
+            configs.rackStandbyTaskAssignor
         );
 
         final AtomicInteger remainingWarmupReplicas = new AtomicInteger(configs.maxWarmupReplicas);
@@ -101,37 +105,63 @@ public class HighAvailabilityTaskAssignor implements TaskAssignor {
         return probingRebalanceNeeded;
     }
 
-    private static void assignActiveStatefulTasks(final SortedMap<UUID, ClientState> clientStates,
-                                                  final SortedSet<TaskId> statefulTasks) {
+    private static Map<TaskId, String> assignActiveStatefulTasks(final SortedMap<UUID, ClientState> clientStates,
+                                                                 final SortedSet<TaskId> statefulTasks) {
+        final Map<TaskId, String> taskRackMapping = new HashMap<>(statefulTasks.size());
+
         Iterator<ClientState> clientStateIterator = null;
         for (final TaskId task : statefulTasks) {
             if (clientStateIterator == null || !clientStateIterator.hasNext()) {
                 clientStateIterator = clientStates.values().iterator();
             }
-            clientStateIterator.next().assignActive(task);
+            final ClientState clientState = clientStateIterator.next();
+            clientState.assignActive(task);
+            taskRackMapping.put(task, clientState.rackId());
         }
 
         balanceTasksOverThreads(
             clientStates,
             ClientState::activeTasks,
             ClientState::unassignActive,
-            ClientState::assignActive
+            ClientState::assignActive,
+            (clientState, taskId) -> true
         );
+
+        return Collections.unmodifiableMap(taskRackMapping);
     }
 
     private static void assignStandbyReplicaTasks(final TreeMap<UUID, ClientState> clientStates,
-                                                  final Set<TaskId> statefulTasks,
-                                                  final int numStandbyReplicas) {
+                                                  final Map<TaskId, String> assignedTaskRacks,
+                                                  final int numStandbyReplicas,
+                                                  final RackStandbyTaskAssignor rackStandbyTaskAssignor) {
         final Map<TaskId, Integer> tasksToRemainingStandbys =
-            statefulTasks.stream().collect(Collectors.toMap(task -> task, t -> numStandbyReplicas));
+            assignedTaskRacks.keySet().stream().collect(Collectors.toMap(task -> task, t -> numStandbyReplicas));
+
+        final Set<String> clientRacks = clientStates
+            .values()
+            .stream()
+            .map(ClientState::rackId)
+            .collect(Collectors.toSet());
+
+        final Map<String, Set<TaskId>> computedTaskAssignment = rackStandbyTaskAssignor.computeStandbyTaskDistribution(
+            assignedTaskRacks,
+            clientRacks
+        );
 
         final ConstrainedPrioritySet standbyTaskClientsByTaskLoad = new ConstrainedPrioritySet(
-            (client, task) -> !clientStates.get(client).hasAssignedTask(task),
+            (client, task) -> {
+                final ClientState clientState = clientStates.get(client);
+                final String destinationTargetRackId = clientState.rackId();
+                final boolean contains = computedTaskAssignment.get(destinationTargetRackId).contains(task);
+
+                return !clientState.hasAssignedTask(task) && contains;
+            },
             client -> clientStates.get(client).assignedTaskLoad()
         );
+
         standbyTaskClientsByTaskLoad.offerAll(clientStates.keySet());
 
-        for (final TaskId task : statefulTasks) {
+        for (final TaskId task : assignedTaskRacks.keySet()) {
             int numRemainingStandbys = tasksToRemainingStandbys.get(task);
             while (numRemainingStandbys > 0) {
                 final UUID client = standbyTaskClientsByTaskLoad.poll(task);
@@ -156,14 +186,19 @@ public class HighAvailabilityTaskAssignor implements TaskAssignor {
             clientStates,
             ClientState::standbyTasks,
             ClientState::unassignStandby,
-            ClientState::assignStandby
+            ClientState::assignStandby,
+            (clientState, taskId) -> {
+                final String destinationTargetRackId = clientState.rackId();
+                return computedTaskAssignment.get(destinationTargetRackId).contains(taskId);
+            }
         );
     }
 
     private static void balanceTasksOverThreads(final SortedMap<UUID, ClientState> clientStates,
                                                 final Function<ClientState, Set<TaskId>> currentAssignmentAccessor,
                                                 final BiConsumer<ClientState, TaskId> taskUnassignor,
-                                                final BiConsumer<ClientState, TaskId> taskAssignor) {
+                                                final BiConsumer<ClientState, TaskId> taskAssignor,
+                                                final BiFunction<ClientState, TaskId, Boolean> constraint) {
         boolean keepBalancing = true;
         while (keepBalancing) {
             keepBalancing = false;
@@ -183,7 +218,8 @@ public class HighAvailabilityTaskAssignor implements TaskAssignor {
                     while (shouldMoveATask(sourceClientState, destinationClientState) && sourceIterator.hasNext()) {
                         final TaskId taskToMove = sourceIterator.next();
                         final boolean canMove = !destinationClientState.hasAssignedTask(taskToMove);
-                        if (canMove) {
+                        final Boolean result = constraint.apply(destinationClientState, taskToMove);
+                        if (canMove && result) {
                             taskUnassignor.accept(sourceClientState, taskToMove);
                             taskAssignor.accept(destinationClientState, taskToMove);
                             keepBalancing = true;

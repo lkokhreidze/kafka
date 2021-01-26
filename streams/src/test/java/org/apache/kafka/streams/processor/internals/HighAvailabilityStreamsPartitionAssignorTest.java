@@ -298,15 +298,16 @@ public class HighAvailabilityStreamsPartitionAssignorTest {
 
     /**
      * Helper for building the input to createMockAdminClient in cases where we don't care about the actual offsets
-     * @param changelogTopics The names of all changelog topics in the topology
+     *
+     * @param changelogTopics     The names of all changelog topics in the topology
      * @param topicsNumPartitions The number of partitions for the corresponding changelog topic, such that the number
-     *            of partitions of the ith topic in changelogTopics is given by the ith element of topicsNumPartitions
+     *                            of partitions of the ith topic in changelogTopics is given by the ith element of topicsNumPartitions
      */
     private static Map<TopicPartition, Long> getTopicPartitionOffsetsMap(final List<String> changelogTopics,
                                                                          final List<Integer> topicsNumPartitions) {
         if (changelogTopics.size() != topicsNumPartitions.size()) {
             throw new IllegalStateException("Passed in " + changelogTopics.size() + " changelog topic names, but " +
-                                                topicsNumPartitions.size() + " different numPartitions for the topics");
+                                            topicsNumPartitions.size() + " different numPartitions for the topics");
         }
         final Map<TopicPartition, Long> changelogEndOffsets = new HashMap<>();
         for (int i = 0; i < changelogTopics.size(); ++i) {
@@ -322,7 +323,7 @@ public class HighAvailabilityStreamsPartitionAssignorTest {
     private static SubscriptionInfo getInfo(final UUID processId,
                                             final Set<TaskId> prevTasks) {
         return new SubscriptionInfo(
-	        LATEST_SUPPORTED_VERSION, LATEST_SUPPORTED_VERSION, processId, null, getTaskOffsetSums(prevTasks), (byte) 0, 0, null);
+            LATEST_SUPPORTED_VERSION, LATEST_SUPPORTED_VERSION, processId, null, getTaskOffsetSums(prevTasks), (byte) 0, 0, null);
     }
 
     // Stub offset sums for when we only care about the prev/standby task sets, not the actual offsets

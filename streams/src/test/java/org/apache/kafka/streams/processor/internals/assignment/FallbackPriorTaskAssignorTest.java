@@ -53,7 +53,7 @@ public class FallbackPriorTaskAssignorTest {
             clients,
             new HashSet<>(taskIds),
             new HashSet<>(taskIds),
-            new AssignorConfiguration.AssignmentConfigs(0L, 1, 0, 60_000L)
+            new AssignorConfiguration.AssignmentConfigs(0L, 1, 0, 60_000L, null)
         );
         assertThat(probingRebalanceNeeded, is(true));
 

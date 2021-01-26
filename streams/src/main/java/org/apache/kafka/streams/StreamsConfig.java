@@ -470,7 +470,13 @@ public class StreamsConfig extends AbstractConfig {
         "<code>transaction.state.log.replication.factor</code> and <code>transaction.state.log.min.isr</code>.";
 
     public static final String RACK_ID_CONFIG = "rack.id";
-    private static final String RACK_ID_DOC = "An identifier for the rack of an instance of Kafka Streams.";
+    private static final String RACK_ID_DOC = "An identifier for the rack of an instance of Kafka Streams. " +
+                                              "When set, the default implementation of org.apache.kafka.streams.StandbyTaskDistributor of the Kafka Streams " +
+                                              "will try to distribute standby tasks in different rack compared to corresponding active task.";
+
+    public static final String RACK_STANDBY_TASK_ASSIGNOR_CLASS_CONFIG = "rack.standby.task.assignor";
+    public static final String RACK_STANDBY_TASK_ASSIGNOR_CLASS_DOC = "Class that implements RackStandbyTaskAssignor interface, " +
+                                                                      "that is used when deciding on which racks standby tasks can be created.";
 
     /** {@code receive.buffer.bytes} */
     @SuppressWarnings("WeakerAccess")
@@ -791,6 +797,11 @@ public class StreamsConfig extends AbstractConfig {
                     null,
                     Importance.LOW,
                     RACK_ID_DOC)
+            .define(RACK_STANDBY_TASK_ASSIGNOR_CLASS_CONFIG,
+                    Type.CLASS,
+                    DefaultRackStandbyTaskAssignor.class.getName(),
+                    Importance.LOW,
+                    RACK_STANDBY_TASK_ASSIGNOR_CLASS_DOC)
             .define(RECEIVE_BUFFER_CONFIG,
                     Type.INT,
                     32 * 1024,
