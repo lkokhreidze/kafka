@@ -16,7 +16,6 @@
  */
 package org.apache.kafka.test;
 
-import java.io.FileWriter;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.Cluster;
@@ -26,6 +25,7 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.network.NetworkReceive;
 import org.apache.kafka.common.network.Send;
 import org.apache.kafka.common.protocol.ApiKeys;
+import org.apache.kafka.common.record.UnalignedRecords;
 import org.apache.kafka.common.requests.ByteBufferChannel;
 import org.apache.kafka.common.requests.RequestHeader;
 import org.apache.kafka.common.utils.Exit;
@@ -34,6 +34,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
@@ -296,7 +297,23 @@ public class TestUtils {
      * avoid transient failures due to slow or overloaded machines.
      */
     public static void waitForCondition(final TestCondition testCondition, final long maxWaitMs, Supplier<String> conditionDetailsSupplier) throws InterruptedException {
-        retryOnExceptionWithTimeout(maxWaitMs, () -> {
+        waitForCondition(testCondition, DEFAULT_POLL_INTERVAL_MS, maxWaitMs, conditionDetailsSupplier);
+    }
+
+    /**
+     * Wait for condition to be met for at most {@code maxWaitMs} with a polling interval of {@code pollIntervalMs}
+     * and throw assertion failure otherwise. This should be used instead of {@code Thread.sleep} whenever possible
+     * as it allows a longer timeout to be used without unnecessarily increasing test time (as the condition is
+     * checked frequently). The longer timeout is needed to avoid transient failures due to slow or overloaded
+     * machines.
+     */
+    public static void waitForCondition(
+        final TestCondition testCondition,
+        final long pollIntervalMs,
+        final long maxWaitMs,
+        Supplier<String> conditionDetailsSupplier
+    ) throws InterruptedException {
+        retryOnExceptionWithTimeout(pollIntervalMs, maxWaitMs, () -> {
             String conditionDetailsSupplied = conditionDetailsSupplier != null ? conditionDetailsSupplier.get() : null;
             String conditionDetails = conditionDetailsSupplied != null ? conditionDetailsSupplied : "";
             assertTrue(testCondition.conditionMet(),
@@ -357,7 +374,7 @@ public class TestUtils {
                 }
             } catch (final Exception e) {
                 if (expectedEnd <= System.currentTimeMillis()) {
-                    throw new AssertionError(e);
+                    throw new AssertionError(String.format("Assertion failed with an exception after %s ms", timeoutMs), e);
                 }
             }
             Thread.sleep(Math.min(pollIntervalMs, timeoutMs));
@@ -435,6 +452,10 @@ public class TestUtils {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    public static ByteBuffer toBuffer(UnalignedRecords records) {
+        return toBuffer(records.toSend());
     }
 
     public static Set<TopicPartition> generateRandomTopicPartitions(int numTopic, int numPartitionPerTopic) {

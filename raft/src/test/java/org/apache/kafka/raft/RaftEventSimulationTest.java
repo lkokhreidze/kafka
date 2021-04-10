@@ -16,9 +16,14 @@
  */
 package org.apache.kafka.raft;
 
+import net.jqwik.api.ForAll;
+import net.jqwik.api.Property;
+import net.jqwik.api.constraints.IntRange;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.memory.MemoryPool;
 import org.apache.kafka.common.metrics.Metrics;
+import org.apache.kafka.common.protocol.ObjectSerializationCache;
 import org.apache.kafka.common.protocol.Readable;
 import org.apache.kafka.common.protocol.Writable;
 import org.apache.kafka.common.protocol.types.Type;
@@ -29,7 +34,7 @@ import org.apache.kafka.common.utils.Utils;
 import org.apache.kafka.raft.MockLog.LogBatch;
 import org.apache.kafka.raft.MockLog.LogEntry;
 import org.apache.kafka.raft.internals.BatchMemoryPool;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Tag;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -55,10 +60,37 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+/**
+ * The simulation testing framework provides a way to verify quorum behavior under
+ * different conditions. It is similar to system testing in that the test involves
+ * independently executing nodes, but there are several important differences:
+ *
+ * 1. Simulation behavior is deterministic provided an initial random seed. This
+ *    makes it easy to reproduce and debug test failures.
+ * 2. The simulation uses an in-memory message router instead of a real network.
+ *    Not only is this much cheaper and faster, it provides an easy way to create
+ *    flaky network conditions or even network partitions without losing the
+ *    simulation determinism.
+ * 3. Similarly, persistent state is stored in memory. We can nevertheless simulate
+ *    different kinds of failures, such as the loss of unflushed data after a hard
+ *    node restart using {@link MockLog}.
+ *
+ * The framework uses a single event scheduler in order to provide deterministic
+ * executions. Each test is setup as a specific scenario with a variable number of
+ * voters and observers. Much like system tests, there is typically a warmup
+ * period, followed by some cluster event (such as a node failure), and then some
+ * logic to validate behavior after recovery.
+ *
+ * If any of the tests fail, the output will indicate the arguments that failed.
+ * The easiest way to reproduce the failure for debugging is to create a separate
+ * `@Test` case which invokes the `@Property` method with those arguments directly.
+ * This ensures that logging output will only include output from a single
+ * simulation execution.
+ */
+@Tag("integration")
 public class RaftEventSimulationTest {
-    private static final TopicPartition METADATA_PARTITION = new TopicPartition("__cluster_metadata", 0);
+    private static final TopicPartition METADATA_PARTITION = new TopicPartition("@metadata", 0);
     private static final int ELECTION_TIMEOUT_MS = 1000;
     private static final int ELECTION_JITTER_MS = 100;
     private static final int FETCH_TIMEOUT_MS = 3000;
@@ -67,344 +99,246 @@ public class RaftEventSimulationTest {
     private static final int FETCH_MAX_WAIT_MS = 100;
     private static final int LINGER_MS = 0;
 
-    @Test
-    public void testInitialLeaderElectionQuorumSizeOne() {
-        testInitialLeaderElection(new QuorumConfig(1));
+    @Property(tries = 100)
+    void canElectInitialLeader(
+        @ForAll int seed,
+        @ForAll @IntRange(min = 1, max = 5) int numVoters,
+        @ForAll @IntRange(min = 0, max = 5) int numObservers
+    ) {
+        Random random = new Random(seed);
+        Cluster cluster = new Cluster(numVoters, numObservers, random);
+        MessageRouter router = new MessageRouter(cluster);
+        EventScheduler scheduler = schedulerWithDefaultInvariants(cluster);
+
+        cluster.startAll();
+        schedulePolling(scheduler, cluster, 3, 5);
+        scheduler.schedule(router::deliverAll, 0, 2, 1);
+        scheduler.schedule(new SequentialAppendAction(cluster), 0, 2, 3);
+        scheduler.runUntil(cluster::hasConsistentLeader);
+        scheduler.runUntil(() -> cluster.allReachedHighWatermark(10));
     }
 
-    @Test
-    public void testInitialLeaderElectionQuorumSizeTwo() {
-        testInitialLeaderElection(new QuorumConfig(2));
-    }
+    @Property(tries = 100)
+    void canElectNewLeaderAfterOldLeaderFailure(
+        @ForAll int seed,
+        @ForAll @IntRange(min = 3, max = 5) int numVoters,
+        @ForAll @IntRange(min = 0, max = 5) int numObservers,
+        @ForAll boolean isGracefulShutdown
+    ) {
+        Random random = new Random(seed);
+        Cluster cluster = new Cluster(numVoters, numObservers, random);
+        MessageRouter router = new MessageRouter(cluster);
+        EventScheduler scheduler = schedulerWithDefaultInvariants(cluster);
 
-    @Test
-    public void testInitialLeaderElectionQuorumSizeThree() {
-        testInitialLeaderElection(new QuorumConfig(3));
-    }
+        // Seed the cluster with some data
+        cluster.startAll();
+        schedulePolling(scheduler, cluster, 3, 5);
+        scheduler.schedule(router::deliverAll, 0, 2, 1);
+        scheduler.schedule(new SequentialAppendAction(cluster), 0, 2, 3);
+        scheduler.runUntil(cluster::hasConsistentLeader);
+        scheduler.runUntil(() -> cluster.anyReachedHighWatermark(10));
 
-    @Test
-    public void testInitialLeaderElectionQuorumSizeFour() {
-        testInitialLeaderElection(new QuorumConfig(4));
-    }
+        // Shutdown the leader and write some more data. We can verify the new leader has been elected
+        // by verifying that the high watermark can still advance.
+        int leaderId = cluster.latestLeader().orElseThrow(() ->
+            new AssertionError("Failed to find current leader")
+        );
 
-    @Test
-    public void testInitialLeaderElectionQuorumSizeFive() {
-        testInitialLeaderElection(new QuorumConfig(5));
-    }
-
-    private void testInitialLeaderElection(QuorumConfig config) {
-        for (int seed = 0; seed < 100; seed++) {
-            Cluster cluster = new Cluster(config, seed);
-            MessageRouter router = new MessageRouter(cluster);
-            EventScheduler scheduler = schedulerWithDefaultInvariants(cluster);
-
-            cluster.startAll();
-            schedulePolling(scheduler, cluster, 3, 5);
-            scheduler.schedule(router::deliverAll, 0, 2, 1);
-            scheduler.schedule(new SequentialAppendAction(cluster), 0, 2, 3);
-            scheduler.runUntil(cluster::hasConsistentLeader);
-            scheduler.runUntil(() -> cluster.allReachedHighWatermark(10));
+        if (isGracefulShutdown) {
+            cluster.shutdown(leaderId);
+        } else {
+            cluster.kill(leaderId);
         }
+
+        scheduler.runUntil(() -> cluster.allReachedHighWatermark(20));
+        long highWatermark = cluster.maxHighWatermarkReached();
+
+        // Restart the node and verify it catches up
+        cluster.start(leaderId);
+        scheduler.runUntil(() -> cluster.allReachedHighWatermark(highWatermark + 10));
     }
 
-    @Test
-    public void testElectionAfterLeaderFailureQuorumSizeThree() {
-        testElectionAfterLeaderFailure(new QuorumConfig(3, 0));
-    }
+    @Property(tries = 100)
+    void canRecoverAfterAllNodesKilled(
+        @ForAll int seed,
+        @ForAll @IntRange(min = 1, max = 5) int numVoters,
+        @ForAll @IntRange(min = 0, max = 5) int numObservers
+    ) {
+        Random random = new Random(seed);
+        Cluster cluster = new Cluster(numVoters, numObservers, random);
+        MessageRouter router = new MessageRouter(cluster);
+        EventScheduler scheduler = schedulerWithDefaultInvariants(cluster);
 
-    @Test
-    public void testElectionAfterLeaderFailureQuorumSizeThreeAndTwoObservers() {
-        testElectionAfterLeaderFailure(new QuorumConfig(3, 1));
-    }
+        // Seed the cluster with some data
+        cluster.startAll();
+        schedulePolling(scheduler, cluster, 3, 5);
+        scheduler.schedule(router::deliverAll, 0, 2, 1);
+        scheduler.schedule(new SequentialAppendAction(cluster), 0, 2, 3);
+        scheduler.runUntil(cluster::hasConsistentLeader);
+        scheduler.runUntil(() -> cluster.anyReachedHighWatermark(10));
+        long highWatermark = cluster.maxHighWatermarkReached();
 
-    @Test
-    public void testElectionAfterLeaderFailureQuorumSizeFour() {
-        testElectionAfterLeaderFailure(new QuorumConfig(4, 0));
-    }
+        // We kill all of the nodes. Then we bring back a majority and verify that
+        // they are able to elect a leader and continue making progress
+        cluster.killAll();
 
-    @Test
-    public void testElectionAfterLeaderFailureQuorumSizeFourAndTwoObservers() {
-        testElectionAfterLeaderFailure(new QuorumConfig(4, 2));
-    }
-
-    @Test
-    public void testElectionAfterLeaderFailureQuorumSizeFive() {
-        testElectionAfterLeaderFailure(new QuorumConfig(5, 0));
-    }
-
-    @Test
-    public void testElectionAfterLeaderFailureQuorumSizeFiveAndThreeObservers() {
-        testElectionAfterLeaderFailure(new QuorumConfig(5, 3));
-    }
-
-    private void testElectionAfterLeaderFailure(QuorumConfig config) {
-        testElectionAfterLeaderShutdown(config, false);
-    }
-
-    @Test
-    public void testElectionAfterLeaderGracefulShutdownQuorumSizeThree() {
-        testElectionAfterLeaderGracefulShutdown(new QuorumConfig(3, 0));
-    }
-
-    @Test
-    public void testElectionAfterLeaderGracefulShutdownQuorumSizeThreeAndTwoObservers() {
-        testElectionAfterLeaderGracefulShutdown(new QuorumConfig(3, 2));
-    }
-
-    @Test
-    public void testElectionAfterLeaderGracefulShutdownQuorumSizeFour() {
-        testElectionAfterLeaderGracefulShutdown(new QuorumConfig(4, 0));
-    }
-
-    @Test
-    public void testElectionAfterLeaderGracefulShutdownQuorumSizeFourAndTwoObservers() {
-        testElectionAfterLeaderGracefulShutdown(new QuorumConfig(4, 2));
-    }
-
-    @Test
-    public void testElectionAfterLeaderGracefulShutdownQuorumSizeFive() {
-        testElectionAfterLeaderGracefulShutdown(new QuorumConfig(5, 0));
-    }
-
-    @Test
-    public void testElectionAfterLeaderGracefulShutdownQuorumSizeFiveAndThreeObservers() {
-        testElectionAfterLeaderGracefulShutdown(new QuorumConfig(5, 3));
-    }
-
-    private void testElectionAfterLeaderGracefulShutdown(QuorumConfig config) {
-        testElectionAfterLeaderShutdown(config, true);
-    }
-
-    private void testElectionAfterLeaderShutdown(QuorumConfig config, boolean isGracefulShutdown) {
-        // We need at least three voters to run this tests
-        assumeTrue(config.numVoters > 2);
-
-        for (int seed = 0; seed < 100; seed++) {
-            Cluster cluster = new Cluster(config, seed);
-            MessageRouter router = new MessageRouter(cluster);
-            EventScheduler scheduler = schedulerWithDefaultInvariants(cluster);
-
-            // Seed the cluster with some data
-            cluster.startAll();
-            schedulePolling(scheduler, cluster, 3, 5);
-            scheduler.schedule(router::deliverAll, 0, 2, 1);
-            scheduler.schedule(new SequentialAppendAction(cluster), 0, 2, 3);
-            scheduler.runUntil(cluster::hasConsistentLeader);
-            scheduler.runUntil(() -> cluster.anyReachedHighWatermark(10));
-
-            // Shutdown the leader and write some more data. We can verify the new leader has been elected
-            // by verifying that the high watermark can still advance.
-            int leaderId = cluster.latestLeader().getAsInt();
-            if (isGracefulShutdown) {
-                cluster.shutdown(leaderId);
-            } else {
-                cluster.kill(leaderId);
-            }
-
-            scheduler.runUntil(() -> cluster.allReachedHighWatermark(20));
-            long highWatermark = cluster.maxHighWatermarkReached();
-
-            // Restart the node and verify it catches up
-            cluster.start(leaderId);
-            scheduler.runUntil(() -> cluster.allReachedHighWatermark(highWatermark + 10));
+        Iterator<Integer> nodeIdsIterator = cluster.nodes().iterator();
+        for (int i = 0; i < cluster.majoritySize(); i++) {
+            Integer nodeId = nodeIdsIterator.next();
+            cluster.start(nodeId);
         }
+
+        scheduler.runUntil(() -> cluster.allReachedHighWatermark(highWatermark + 10));
     }
 
-    @Test
-    public void testRecoveryAfterAllNodesFailQuorumSizeThree() {
-        testRecoveryAfterAllNodesFail(new QuorumConfig(3));
+    @Property(tries = 100)
+    void canElectNewLeaderAfterOldLeaderPartitionedAway(
+        @ForAll int seed,
+        @ForAll @IntRange(min = 3, max = 5) int numVoters,
+        @ForAll @IntRange(min = 0, max = 5) int numObservers
+    ) {
+        Random random = new Random(seed);
+        Cluster cluster = new Cluster(numVoters, numObservers, random);
+        MessageRouter router = new MessageRouter(cluster);
+        EventScheduler scheduler = schedulerWithDefaultInvariants(cluster);
+
+        // Seed the cluster with some data
+        cluster.startAll();
+        schedulePolling(scheduler, cluster, 3, 5);
+        scheduler.schedule(router::deliverAll, 0, 2, 2);
+        scheduler.schedule(new SequentialAppendAction(cluster), 0, 2, 3);
+        scheduler.runUntil(cluster::hasConsistentLeader);
+        scheduler.runUntil(() -> cluster.anyReachedHighWatermark(10));
+
+        // The leader gets partitioned off. We can verify the new leader has been elected
+        // by writing some data and ensuring that it gets replicated
+        int leaderId = cluster.latestLeader().orElseThrow(() ->
+            new AssertionError("Failed to find current leader")
+        );
+        router.filter(leaderId, new DropAllTraffic());
+
+        Set<Integer> nonPartitionedNodes = new HashSet<>(cluster.nodes());
+        nonPartitionedNodes.remove(leaderId);
+
+        scheduler.runUntil(() -> cluster.allReachedHighWatermark(20, nonPartitionedNodes));
     }
 
-    @Test
-    public void testRecoveryAfterAllNodesFailQuorumSizeFour() {
-        testRecoveryAfterAllNodesFail(new QuorumConfig(4));
+    @Property(tries = 100)
+    void canMakeProgressIfMajorityIsReachable(
+        @ForAll int seed,
+        @ForAll @IntRange(min = 0, max = 3) int numObservers
+    ) {
+        int numVoters = 5;
+        Random random = new Random(seed);
+        Cluster cluster = new Cluster(numVoters, numObservers, random);
+        MessageRouter router = new MessageRouter(cluster);
+        EventScheduler scheduler = schedulerWithDefaultInvariants(cluster);
+
+        // Seed the cluster with some data
+        cluster.startAll();
+        schedulePolling(scheduler, cluster, 3, 5);
+        scheduler.schedule(router::deliverAll, 0, 2, 2);
+        scheduler.schedule(new SequentialAppendAction(cluster), 0, 2, 3);
+        scheduler.runUntil(cluster::hasConsistentLeader);
+        scheduler.runUntil(() -> cluster.anyReachedHighWatermark(10));
+
+        // Partition the nodes into two sets. Nodes are reachable within each set,
+        // but the two sets cannot communicate with each other. We should be able
+        // to make progress even if an election is needed in the larger set.
+        router.filter(0, new DropOutboundRequestsFrom(Utils.mkSet(2, 3, 4)));
+        router.filter(1, new DropOutboundRequestsFrom(Utils.mkSet(2, 3, 4)));
+        router.filter(2, new DropOutboundRequestsFrom(Utils.mkSet(0, 1)));
+        router.filter(3, new DropOutboundRequestsFrom(Utils.mkSet(0, 1)));
+        router.filter(4, new DropOutboundRequestsFrom(Utils.mkSet(0, 1)));
+
+        scheduler.runUntil(() -> cluster.anyReachedHighWatermark(20));
+
+        long minorityHighWatermark = cluster.maxHighWatermarkReached(Utils.mkSet(0, 1));
+        long majorityHighWatermark = cluster.maxHighWatermarkReached(Utils.mkSet(2, 3, 4));
+
+        assertTrue(majorityHighWatermark > minorityHighWatermark);
+
+        // Now restore the partition and verify everyone catches up
+        router.filter(0, new PermitAllTraffic());
+        router.filter(1, new PermitAllTraffic());
+        router.filter(2, new PermitAllTraffic());
+        router.filter(3, new PermitAllTraffic());
+        router.filter(4, new PermitAllTraffic());
+
+        scheduler.runUntil(() -> cluster.allReachedHighWatermark(30));
     }
 
-    @Test
-    public void testRecoveryAfterAllNodesFailQuorumSizeFive() {
-        testRecoveryAfterAllNodesFail(new QuorumConfig(5));
+    @Property(tries = 100)
+    void canMakeProgressAfterBackToBackLeaderFailures(
+        @ForAll int seed,
+        @ForAll @IntRange(min = 3, max = 5) int numVoters,
+        @ForAll @IntRange(min = 0, max = 5) int numObservers
+    ) {
+        Random random = new Random(seed);
+        Cluster cluster = new Cluster(numVoters, numObservers, random);
+        MessageRouter router = new MessageRouter(cluster);
+        EventScheduler scheduler = schedulerWithDefaultInvariants(cluster);
+
+        // Seed the cluster with some data
+        cluster.startAll();
+        schedulePolling(scheduler, cluster, 3, 5);
+        scheduler.schedule(router::deliverAll, 0, 2, 5);
+        scheduler.schedule(new SequentialAppendAction(cluster), 0, 2, 3);
+        scheduler.runUntil(cluster::hasConsistentLeader);
+        scheduler.runUntil(() -> cluster.anyReachedHighWatermark(10));
+
+        int leaderId = cluster.latestLeader().getAsInt();
+        router.filter(leaderId, new DropAllTraffic());
+        scheduler.runUntil(() -> cluster.latestLeader().isPresent() && cluster.latestLeader().getAsInt() != leaderId);
+
+        // As soon as we have a new leader, restore traffic to the old leader and partition the new leader
+        int newLeaderId = cluster.latestLeader().getAsInt();
+        router.filter(leaderId, new PermitAllTraffic());
+        router.filter(newLeaderId, new DropAllTraffic());
+
+        // Verify now that we can make progress
+        long targetHighWatermark = cluster.maxHighWatermarkReached() + 10;
+        scheduler.runUntil(() -> cluster.anyReachedHighWatermark(targetHighWatermark));
     }
 
-    private void testRecoveryAfterAllNodesFail(QuorumConfig config) {
-        for (int seed = 0; seed < 100; seed++) {
-            Cluster cluster = new Cluster(config, seed);
-            MessageRouter router = new MessageRouter(cluster);
-            EventScheduler scheduler = schedulerWithDefaultInvariants(cluster);
+    @Property(tries = 100)
+    void canRecoverFromSingleNodeCommittedDataLoss(
+        @ForAll int seed,
+        @ForAll @IntRange(min = 3, max = 5) int numVoters,
+        @ForAll @IntRange(min = 0, max = 2) int numObservers
+    ) {
+        // We run this test without the `MonotonicEpoch` and `MajorityReachedHighWatermark`
+        // invariants since the loss of committed data on one node can violate them.
 
-            // Seed the cluster with some data
-            cluster.startAll();
-            schedulePolling(scheduler, cluster, 3, 5);
-            scheduler.schedule(router::deliverAll, 0, 2, 1);
-            scheduler.schedule(new SequentialAppendAction(cluster), 0, 2, 3);
-            scheduler.runUntil(cluster::hasConsistentLeader);
-            scheduler.runUntil(() -> cluster.anyReachedHighWatermark(10));
-            long highWatermark = cluster.maxHighWatermarkReached();
+        Random random = new Random(seed);
+        Cluster cluster = new Cluster(numVoters, numObservers, random);
+        EventScheduler scheduler = new EventScheduler(cluster.random, cluster.time);
+        scheduler.addInvariant(new MonotonicHighWatermark(cluster));
+        scheduler.addInvariant(new SingleLeader(cluster));
+        scheduler.addValidation(new ConsistentCommittedData(cluster));
 
-            // We kill all of the nodes. Then we bring back a majority and verify that
-            // they are able to elect a leader and continue making progress
+        MessageRouter router = new MessageRouter(cluster);
 
-            cluster.killAll();
+        cluster.startAll();
+        schedulePolling(scheduler, cluster, 3, 5);
+        scheduler.schedule(router::deliverAll, 0, 2, 5);
+        scheduler.schedule(new SequentialAppendAction(cluster), 0, 2, 3);
+        scheduler.runUntil(() -> cluster.anyReachedHighWatermark(10));
 
-            Iterator<Integer> nodeIdsIterator = cluster.nodes().iterator();
-            for (int i = 0; i < cluster.majoritySize(); i++) {
-                Integer nodeId = nodeIdsIterator.next();
-                cluster.start(nodeId);
-            }
+        RaftNode node = cluster.randomRunning().orElseThrow(() ->
+            new AssertionError("Failed to find running node")
+        );
 
-            scheduler.runUntil(() -> cluster.allReachedHighWatermark(highWatermark + 10));
-        }
-    }
+        // Kill a random node and drop all of its persistent state. The Raft
+        // protocol guarantees should still ensure we lose no committed data
+        // as long as a new leader is elected before the failed node is restarted.
+        cluster.killAndDeletePersistentState(node.nodeId);
+        scheduler.runUntil(() -> !cluster.hasLeader(node.nodeId) && cluster.hasConsistentLeader());
 
-    @Test
-    public void testElectionAfterLeaderNetworkPartitionQuorumSizeThree() {
-        testElectionAfterLeaderNetworkPartition(new QuorumConfig(3));
-    }
-
-    @Test
-    public void testElectionAfterLeaderNetworkPartitionQuorumSizeThreeAndTwoObservers() {
-        testElectionAfterLeaderNetworkPartition(new QuorumConfig(3, 2));
-    }
-
-    @Test
-    public void testElectionAfterLeaderNetworkPartitionQuorumSizeFour() {
-        testElectionAfterLeaderNetworkPartition(new QuorumConfig(4));
-    }
-
-    @Test
-    public void testElectionAfterLeaderNetworkPartitionQuorumSizeFourAndTwoObservers() {
-        testElectionAfterLeaderNetworkPartition(new QuorumConfig(4, 2));
-    }
-
-    @Test
-    public void testElectionAfterLeaderNetworkPartitionQuorumSizeFive() {
-        testElectionAfterLeaderNetworkPartition(new QuorumConfig(5));
-    }
-
-    @Test
-    public void testElectionAfterLeaderNetworkPartitionQuorumSizeFiveAndThreeObservers() {
-        testElectionAfterLeaderNetworkPartition(new QuorumConfig(5, 3));
-    }
-
-    private void testElectionAfterLeaderNetworkPartition(QuorumConfig config) {
-        // We need at least three voters to run this tests
-        assumeTrue(config.numVoters > 2);
-
-        for (int seed = 0; seed < 100; seed++) {
-            Cluster cluster = new Cluster(config, seed);
-            MessageRouter router = new MessageRouter(cluster);
-            EventScheduler scheduler = schedulerWithDefaultInvariants(cluster);
-
-            // Seed the cluster with some data
-            cluster.startAll();
-            schedulePolling(scheduler, cluster, 3, 5);
-            scheduler.schedule(router::deliverAll, 0, 2, 2);
-            scheduler.schedule(new SequentialAppendAction(cluster), 0, 2, 3);
-            scheduler.runUntil(cluster::hasConsistentLeader);
-            scheduler.runUntil(() -> cluster.anyReachedHighWatermark(10));
-
-            // The leader gets partitioned off. We can verify the new leader has been elected
-            // by writing some data and ensuring that it gets replicated
-            int leaderId = cluster.latestLeader().getAsInt();
-            router.filter(leaderId, new DropAllTraffic());
-
-            Set<Integer> nonPartitionedNodes = new HashSet<>(cluster.nodes());
-            nonPartitionedNodes.remove(leaderId);
-
-            scheduler.runUntil(() -> cluster.allReachedHighWatermark(20, nonPartitionedNodes));
-        }
-    }
-
-    @Test
-    public void testElectionAfterMultiNodeNetworkPartitionQuorumSizeFive() {
-        testElectionAfterMultiNodeNetworkPartition(new QuorumConfig(5));
-    }
-
-    @Test
-    public void testElectionAfterMultiNodeNetworkPartitionQuorumSizeFiveAndTwoObservers() {
-        testElectionAfterMultiNodeNetworkPartition(new QuorumConfig(5, 2));
-    }
-
-    private void testElectionAfterMultiNodeNetworkPartition(QuorumConfig config) {
-        // We need at least three voters to run this tests
-        assumeTrue(config.numVoters > 2);
-
-        for (int seed = 0; seed < 100; seed++) {
-            Cluster cluster = new Cluster(config, seed);
-            MessageRouter router = new MessageRouter(cluster);
-            EventScheduler scheduler = schedulerWithDefaultInvariants(cluster);
-
-            // Seed the cluster with some data
-            cluster.startAll();
-            schedulePolling(scheduler, cluster, 3, 5);
-            scheduler.schedule(router::deliverAll, 0, 2, 2);
-            scheduler.schedule(new SequentialAppendAction(cluster), 0, 2, 3);
-            scheduler.runUntil(cluster::hasConsistentLeader);
-            scheduler.runUntil(() -> cluster.anyReachedHighWatermark(10));
-
-            // Partition the nodes into two sets. Nodes are reachable within each set,
-            // but the two sets cannot communicate with each other. We should be able
-            // to make progress even if an election is needed in the larger set.
-            router.filter(0, new DropOutboundRequestsFrom(Utils.mkSet(2, 3, 4)));
-            router.filter(1, new DropOutboundRequestsFrom(Utils.mkSet(2, 3, 4)));
-            router.filter(2, new DropOutboundRequestsFrom(Utils.mkSet(0, 1)));
-            router.filter(3, new DropOutboundRequestsFrom(Utils.mkSet(0, 1)));
-            router.filter(4, new DropOutboundRequestsFrom(Utils.mkSet(0, 1)));
-
-            scheduler.runUntil(() -> cluster.anyReachedHighWatermark(20));
-
-            long minorityHighWatermark = cluster.maxHighWatermarkReached(Utils.mkSet(0, 1));
-            long majorityHighWatermark = cluster.maxHighWatermarkReached(Utils.mkSet(2, 3, 4));
-
-            assertTrue(majorityHighWatermark > minorityHighWatermark);
-
-            // Now restore the partition and verify everyone catches up
-            router.filter(0, new PermitAllTraffic());
-            router.filter(1, new PermitAllTraffic());
-            router.filter(2, new PermitAllTraffic());
-            router.filter(3, new PermitAllTraffic());
-            router.filter(4, new PermitAllTraffic());
-
-            scheduler.runUntil(() -> cluster.allReachedHighWatermark(30));
-        }
-    }
-
-    @Test
-    public void testBackToBackLeaderFailuresQuorumSizeThree() {
-        testBackToBackLeaderFailures(new QuorumConfig(3));
-    }
-
-    @Test
-    public void testBackToBackLeaderFailuresQuorumSizeFiveAndTwoObservers() {
-        testBackToBackLeaderFailures(new QuorumConfig(5, 2));
-    }
-
-    private void testBackToBackLeaderFailures(QuorumConfig config) {
-        for (int seed = 0; seed < 100; seed++) {
-            Cluster cluster = new Cluster(config, seed);
-            MessageRouter router = new MessageRouter(cluster);
-            EventScheduler scheduler = schedulerWithDefaultInvariants(cluster);
-
-            // Seed the cluster with some data
-            cluster.startAll();
-            schedulePolling(scheduler, cluster, 3, 5);
-            scheduler.schedule(router::deliverAll, 0, 2, 5);
-            scheduler.schedule(new SequentialAppendAction(cluster), 0, 2, 3);
-            scheduler.runUntil(cluster::hasConsistentLeader);
-            scheduler.runUntil(() -> cluster.anyReachedHighWatermark(10));
-
-            int leaderId = cluster.latestLeader().getAsInt();
-            router.filter(leaderId, new DropAllTraffic());
-            scheduler.runUntil(() -> cluster.latestLeader().isPresent() && cluster.latestLeader().getAsInt() != leaderId);
-
-            // As soon as we have a new leader, restore traffic to the old leader and partition the new leader
-            int newLeaderId = cluster.latestLeader().getAsInt();
-            router.filter(leaderId, new PermitAllTraffic());
-            router.filter(newLeaderId, new DropAllTraffic());
-
-            // Verify now that we can make progress
-            long targetHighWatermark = cluster.maxHighWatermarkReached() + 10;
-            scheduler.runUntil(() -> cluster.anyReachedHighWatermark(targetHighWatermark));
-        }
+        // Now restart the failed node and ensure that it recovers.
+        long highWatermarkBeforeRestart = cluster.maxHighWatermarkReached();
+        cluster.start(node.nodeId);
+        scheduler.runUntil(() -> cluster.allReachedHighWatermark(highWatermarkBeforeRestart + 10));
     }
 
     private EventScheduler schedulerWithDefaultInvariants(Cluster cluster) {
@@ -428,24 +362,19 @@ public class RaftEventSimulationTest {
         }
     }
 
-    @FunctionalInterface
-    private interface Action {
-        void execute();
-    }
-
     private static abstract class Event implements Comparable<Event> {
         final int eventId;
         final long deadlineMs;
-        final Action action;
+        final Runnable action;
 
-        protected Event(Action action, int eventId, long deadlineMs) {
+        protected Event(Runnable action, int eventId, long deadlineMs) {
             this.action = action;
             this.eventId = eventId;
             this.deadlineMs = deadlineMs;
         }
 
         void execute(EventScheduler scheduler) {
-            action.execute();
+            action.run();
         }
 
         public int compareTo(Event other) {
@@ -461,7 +390,7 @@ public class RaftEventSimulationTest {
         final int periodMs;
         final int jitterMs;
 
-        protected PeriodicEvent(Action action,
+        protected PeriodicEvent(Runnable action,
                                 int eventId,
                                 Random random,
                                 long deadlineMs,
@@ -481,7 +410,7 @@ public class RaftEventSimulationTest {
         }
     }
 
-    private static class SequentialAppendAction implements Action {
+    private static class SequentialAppendAction implements Runnable {
         final Cluster cluster;
 
         private SequentialAppendAction(Cluster cluster) {
@@ -489,7 +418,7 @@ public class RaftEventSimulationTest {
         }
 
         @Override
-        public void execute() {
+        public void run() {
             cluster.withCurrentLeader(node -> {
                 if (!node.client.isShuttingDown() && node.counter.isWritable())
                     node.counter.increment();
@@ -497,7 +426,6 @@ public class RaftEventSimulationTest {
         }
     }
 
-    @FunctionalInterface
     private interface Invariant {
         void verify();
     }
@@ -507,6 +435,8 @@ public class RaftEventSimulationTest {
     }
 
     private static class EventScheduler {
+        private static final int MAX_ITERATIONS = 500000;
+
         final AtomicInteger eventIdGenerator = new AtomicInteger(0);
         final PriorityQueue<Event> queue = new PriorityQueue<>();
         final Random random;
@@ -529,7 +459,7 @@ public class RaftEventSimulationTest {
             validations.add(validation);
         }
 
-        void schedule(Action action, int delayMs, int periodMs, int jitterMs) {
+        void schedule(Runnable action, int delayMs, int periodMs, int jitterMs) {
             long initialDeadlineMs = time.milliseconds() + delayMs;
             int eventId = eventIdGenerator.incrementAndGet();
             PeriodicEvent event = new PeriodicEvent(action, eventId, random, initialDeadlineMs, periodMs, jitterMs);
@@ -537,9 +467,15 @@ public class RaftEventSimulationTest {
         }
 
         void runUntil(Supplier<Boolean> exitCondition) {
-            while (!exitCondition.get()) {
-                if (queue.isEmpty())
+            for (int iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+                if (exitCondition.get()) {
+                    break;
+                }
+
+                if (queue.isEmpty()) {
                     throw new IllegalStateException("Event queue exhausted before condition was satisfied");
+                }
+
                 Event event = queue.poll();
                 long delayMs = Math.max(event.deadlineMs - time.milliseconds(), 0);
                 time.sleep(delayMs);
@@ -547,48 +483,37 @@ public class RaftEventSimulationTest {
                 invariants.forEach(Invariant::verify);
             }
 
+            assertTrue(exitCondition.get(), "Simulation condition was not satisfied after "
+                + MAX_ITERATIONS + " iterations");
+
             validations.forEach(Validation::validate);
         }
     }
 
-    private static class QuorumConfig {
-        final int numVoters;
-        final int numObservers;
-
-        private QuorumConfig(int numVoters, int numObservers) {
-            this.numVoters = numVoters;
-            this.numObservers = numObservers;
-        }
-
-        private QuorumConfig(int numVoters) {
-            this(numVoters, 0);
-        }
-
-    }
-
     private static class PersistentState {
         final MockQuorumStateStore store = new MockQuorumStateStore();
-        final MockLog log = new MockLog(METADATA_PARTITION);
+        final MockLog log = new MockLog(METADATA_PARTITION, Uuid.METADATA_TOPIC_ID);
     }
 
     private static class Cluster {
         final Random random;
         final AtomicInteger correlationIdCounter = new AtomicInteger();
         final MockTime time = new MockTime();
+        final Uuid clusterId = Uuid.randomUuid();
         final Set<Integer> voters = new HashSet<>();
         final Map<Integer, PersistentState> nodes = new HashMap<>();
         final Map<Integer, RaftNode> running = new HashMap<>();
 
-        private Cluster(QuorumConfig config, int randomSeed) {
-            this.random = new Random(randomSeed);
+        private Cluster(int numVoters, int numObservers, Random random) {
+            this.random = random;
 
             int nodeId = 0;
-            for (; nodeId < config.numVoters; nodeId++) {
+            for (; nodeId < numVoters; nodeId++) {
                 voters.add(nodeId);
                 nodes.put(nodeId, new PersistentState());
             }
 
-            for (; nodeId < config.numVoters + config.numObservers; nodeId++) {
+            for (; nodeId < numVoters + numObservers; nodeId++) {
                 nodes.put(nodeId, new PersistentState());
             }
         }
@@ -599,10 +524,6 @@ public class RaftEventSimulationTest {
 
         int majoritySize() {
             return voters.size() / 2 + 1;
-        }
-
-        Set<Integer> voters() {
-            return voters;
         }
 
         OptionalLong leaderHighWatermark() {
@@ -617,12 +538,12 @@ public class RaftEventSimulationTest {
 
         boolean anyReachedHighWatermark(long offset) {
             return running.values().stream()
-                    .anyMatch(node -> node.client.quorum().highWatermark().map(hw -> hw.offset).orElse(0L) > offset);
+                    .anyMatch(node -> node.highWatermark() > offset);
         }
 
         long maxHighWatermarkReached() {
             return running.values().stream()
-                .map(node -> node.client.quorum().highWatermark().map(hw -> hw.offset).orElse(0L))
+                .map(RaftNode::highWatermark)
                 .max(Long::compareTo)
                 .orElse(0L);
         }
@@ -630,20 +551,24 @@ public class RaftEventSimulationTest {
         long maxHighWatermarkReached(Set<Integer> nodeIds) {
             return running.values().stream()
                 .filter(node -> nodeIds.contains(node.nodeId))
-                .map(node -> node.client.quorum().highWatermark().map(hw -> hw.offset).orElse(0L))
+                .map(RaftNode::highWatermark)
                 .max(Long::compareTo)
                 .orElse(0L);
         }
 
         boolean allReachedHighWatermark(long offset, Set<Integer> nodeIds) {
             return nodeIds.stream()
-                .allMatch(nodeId -> running.get(nodeId).client.quorum().highWatermark().map(hw -> hw.offset)
-                    .orElse(0L) > offset);
+                .allMatch(nodeId -> running.get(nodeId).highWatermark() > offset);
         }
 
         boolean allReachedHighWatermark(long offset) {
             return running.values().stream()
-                .allMatch(node -> node.client.quorum().highWatermark().map(hw -> hw.offset).orElse(0L) > offset);
+                .allMatch(node -> node.highWatermark() > offset);
+        }
+
+        boolean hasLeader(int nodeId) {
+            OptionalInt latestLeader = latestLeader();
+            return latestLeader.isPresent() && latestLeader.getAsInt() == nodeId;
         }
 
         OptionalInt latestLeader() {
@@ -712,11 +637,12 @@ public class RaftEventSimulationTest {
             nodeIfRunning(nodeId).ifPresent(action);
         }
 
-        void forRandomRunning(Consumer<RaftNode> action) {
+        Optional<RaftNode> randomRunning() {
             List<RaftNode> nodes = new ArrayList<>(running.values());
-            if (!nodes.isEmpty()) {
-                RaftNode randomNode = nodes.get(random.nextInt(nodes.size()));
-                action.accept(randomNode);
+            if (nodes.isEmpty()) {
+                return Optional.empty();
+            } else {
+                return Optional.of(nodes.get(random.nextInt(nodes.size())));
             }
         }
 
@@ -735,20 +661,26 @@ public class RaftEventSimulationTest {
         void startAll() {
             if (!running.isEmpty())
                 throw new IllegalStateException("Some nodes are already started");
-            for (int voterId : nodes.keySet())
+            for (int voterId : nodes.keySet()) {
                 start(voterId);
+            }
         }
 
-        private static InetSocketAddress nodeAddress(int id) {
-            return new InetSocketAddress("localhost", 9990 + id);
+        void killAndDeletePersistentState(int nodeId) {
+            kill(nodeId);
+            nodes.put(nodeId, new PersistentState());
+        }
+
+        private static RaftConfig.AddressSpec nodeAddress(int id) {
+            return new RaftConfig.InetAddressSpec(new InetSocketAddress("localhost", 9990 + id));
         }
 
         void start(int nodeId) {
             LogContext logContext = new LogContext("[Node " + nodeId + "] ");
             PersistentState persistentState = nodes.get(nodeId);
-            MockNetworkChannel channel = new MockNetworkChannel(correlationIdCounter);
+            MockNetworkChannel channel = new MockNetworkChannel(correlationIdCounter, voters);
             MockMessageQueue messageQueue = new MockMessageQueue();
-            Map<Integer, InetSocketAddress> voterAddressMap = voters.stream()
+            Map<Integer, RaftConfig.AddressSpec> voterAddressMap = voters.stream()
                 .collect(Collectors.toMap(id -> id, Cluster::nodeAddress));
             RaftConfig raftConfig = new RaftConfig(voterAddressMap, REQUEST_TIMEOUT_MS, RETRY_BACKOFF_MS, ELECTION_TIMEOUT_MS,
                     ELECTION_JITTER_MS, FETCH_TIMEOUT_MS, LINGER_MS);
@@ -757,7 +689,7 @@ public class RaftEventSimulationTest {
             persistentState.log.reopen();
 
             IntSerde serde = new IntSerde();
-            MemoryPool memoryPool = new BatchMemoryPool(2, KafkaRaftClient.MAX_BATCH_SIZE);
+            MemoryPool memoryPool = new BatchMemoryPool(2, KafkaRaftClient.MAX_BATCH_SIZE_BYTES);
 
             KafkaRaftClient<Integer> client = new KafkaRaftClient<>(
                 serde,
@@ -770,9 +702,11 @@ public class RaftEventSimulationTest {
                 metrics,
                 new MockExpirationService(time),
                 FETCH_MAX_WAIT_MS,
+                clusterId.toString(),
                 OptionalInt.of(nodeId),
                 logContext,
-                random
+                random,
+                raftConfig
             );
             RaftNode node = new RaftNode(
                 nodeId,
@@ -783,8 +717,7 @@ public class RaftEventSimulationTest {
                 persistentState.store,
                 logContext,
                 time,
-                random,
-                raftConfig
+                random
             );
             node.initialize();
             running.put(nodeId, node);
@@ -802,7 +735,6 @@ public class RaftEventSimulationTest {
         final ReplicatedCounter counter;
         final Time time;
         final Random random;
-        final RaftConfig raftConfig;
 
         private RaftNode(
             int nodeId,
@@ -813,8 +745,7 @@ public class RaftEventSimulationTest {
             MockQuorumStateStore store,
             LogContext logContext,
             Time time,
-            Random random,
-            RaftConfig raftConfig
+            Random random
         ) {
             this.nodeId = nodeId;
             this.client = client;
@@ -826,13 +757,12 @@ public class RaftEventSimulationTest {
             this.time = time;
             this.random = random;
             this.counter = new ReplicatedCounter(nodeId, client, logContext);
-            this.raftConfig = raftConfig;
         }
 
         void initialize() {
             try {
                 client.register(this.counter);
-                client.initialize(raftConfig);
+                client.initialize();
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -846,6 +776,17 @@ public class RaftEventSimulationTest {
             } catch (Exception e) {
                 throw new RuntimeException("Uncaught exception during poll of node " + nodeId, e);
             }
+        }
+
+        long highWatermark() {
+            return client.quorum().highWatermark()
+                .map(hw -> hw.offset)
+                .orElse(0L);
+        }
+
+        @Override
+        public String toString() {
+            return "Node(id=" + nodeId + ", hw=" + highWatermark() + ")";
         }
     }
 
@@ -933,8 +874,13 @@ public class RaftEventSimulationTest {
                 Integer nodeId = nodeStateEntry.getKey();
                 PersistentState state = nodeStateEntry.getValue();
                 Integer oldEpoch = nodeEpochs.get(nodeId);
-                Integer newEpoch = state.store.readElectionState().epoch;
 
+                ElectionState electionState = state.store.readElectionState();
+                if (electionState == null) {
+                    continue;
+                }
+
+                Integer newEpoch = electionState.epoch;
                 if (oldEpoch > newEpoch) {
                     fail("Non-monotonic update of epoch detected on node " + nodeId + ": " +
                             oldEpoch + " -> " + newEpoch);
@@ -983,7 +929,7 @@ public class RaftEventSimulationTest {
                 PersistentState state = nodeEntry.getValue();
                 ElectionState electionState = state.store.readElectionState();
 
-                if (electionState.epoch >= epoch && electionState.hasLeader()) {
+                if (electionState != null && electionState.epoch >= epoch && electionState.hasLeader()) {
                     if (epoch == electionState.epoch && leaderId.isPresent()) {
                         assertEquals(leaderId.getAsInt(), electionState.leaderId());
                     } else {
@@ -992,7 +938,6 @@ public class RaftEventSimulationTest {
                     }
                 }
             }
-
         }
     }
 
@@ -1140,12 +1085,12 @@ public class RaftEventSimulationTest {
 
     private static class IntSerde implements RecordSerde<Integer> {
         @Override
-        public int recordSize(Integer data, Object context) {
+        public int recordSize(Integer data, ObjectSerializationCache serializationCache) {
             return Type.INT32.sizeOf(data);
         }
 
         @Override
-        public void write(Integer data, Object context, Writable out) {
+        public void write(Integer data, ObjectSerializationCache serializationCache, Writable out) {
             out.writeInt(data);
         }
 

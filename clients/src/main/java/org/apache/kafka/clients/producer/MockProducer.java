@@ -314,7 +314,7 @@ public class MockProducer<K, V> implements Producer<K, V> {
                 0L, 0, 0, Time.SYSTEM);
         long offset = nextOffset(topicPartition);
         Completion completion = new Completion(offset, new RecordMetadata(topicPartition, 0, offset,
-                RecordBatch.NO_TIMESTAMP, 0L, 0, 0), result, callback);
+                RecordBatch.NO_TIMESTAMP, 0L, 0, 0), result, callback, topicPartition);
 
         if (!this.transactionInFlight)
             this.sent.add(record);
@@ -512,24 +512,32 @@ public class MockProducer<K, V> implements Producer<K, V> {
         private final RecordMetadata metadata;
         private final ProduceRequestResult result;
         private final Callback callback;
+        private final TopicPartition tp;
 
         public Completion(long offset,
                           RecordMetadata metadata,
                           ProduceRequestResult result,
-                          Callback callback) {
+                          Callback callback,
+                          TopicPartition tp) {
             this.metadata = metadata;
             this.offset = offset;
             this.result = result;
             this.callback = callback;
+            this.tp = tp;
         }
 
         public void complete(RuntimeException e) {
-            result.set(e == null ? offset : -1L, RecordBatch.NO_TIMESTAMP, e);
+            if (e == null) {
+                result.set(offset, RecordBatch.NO_TIMESTAMP, null);
+            } else {
+                result.set(-1, RecordBatch.NO_TIMESTAMP, index -> e);
+            }
+
             if (callback != null) {
                 if (e == null)
                     callback.onCompletion(metadata, null);
                 else
-                    callback.onCompletion(null, e);
+                    callback.onCompletion(new RecordMetadata(tp, -1, -1, RecordBatch.NO_TIMESTAMP, -1L, -1, -1), e);
             }
             result.done();
         }
