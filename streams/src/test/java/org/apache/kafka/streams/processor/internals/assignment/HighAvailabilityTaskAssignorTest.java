@@ -70,15 +70,15 @@ public class HighAvailabilityTaskAssignorTest {
         /*acceptableRecoveryLag*/ 100L,
         /*maxWarmupReplicas*/ 2,
         /*numStandbyReplicas*/ 0,
-        /*probingRebalanceIntervalMs*/ 60 * 1000L,
-                                  null);
+        /*probingRebalanceIntervalMs*/ 60 * 1000L
+    );
 
     private final AssignmentConfigs configWithStandbys = new AssignmentConfigs(
         /*acceptableRecoveryLag*/ 100L,
         /*maxWarmupReplicas*/ 2,
         /*numStandbyReplicas*/ 1,
-        /*probingRebalanceIntervalMs*/ 60 * 1000L,
-                                  null);
+        /*probingRebalanceIntervalMs*/ 60 * 1000L
+    );
 
     @Test
     public void shouldBeStickyForActiveAndStandbyTasksWhileWarmingUp() {
@@ -97,7 +97,7 @@ public class HighAvailabilityTaskAssignorTest {
             clientStates,
             allTaskIds,
             allTaskIds,
-            new AssignmentConfigs(11L, 2, 1, 60_000L, null)
+            new AssignmentConfigs(11L, 2, 1, 60_000L)
         );
 
         assertThat(clientState1, hasAssignedTasks(allTaskIds.size()));
@@ -126,7 +126,7 @@ public class HighAvailabilityTaskAssignorTest {
             clientStates,
             allTaskIds,
             allTaskIds,
-            new AssignmentConfigs(Long.MAX_VALUE, 1, 1, 60_000L, null)
+            new AssignmentConfigs(Long.MAX_VALUE, 1, 1, 60_000L)
         );
 
         assertThat(clientState1, hasAssignedTasks(6));
@@ -147,7 +147,7 @@ public class HighAvailabilityTaskAssignorTest {
             clientStates,
             allTaskIds,
             allTaskIds,
-            new AssignmentConfigs(0L, 1, 0, 60_000L, null)
+            new AssignmentConfigs(0L, 1, 0, 60_000L)
         );
         assertThat(unstable, is(false));
         assertValidAssignment(0, allTaskIds, emptySet(), clientStates, new StringBuilder());
@@ -168,7 +168,7 @@ public class HighAvailabilityTaskAssignorTest {
             clientStates,
             allTaskIds,
             allTaskIds,
-            new AssignmentConfigs(0L, 1, 0, 60_000L, null)
+            new AssignmentConfigs(0L, 1, 0, 60_000L)
         );
         assertThat(unstable, is(false));
         assertValidAssignment(0, allTaskIds, emptySet(), clientStates, new StringBuilder());
@@ -188,7 +188,7 @@ public class HighAvailabilityTaskAssignorTest {
             clientStates,
             allTaskIds,
             allTaskIds,
-            new AssignmentConfigs(0L, 1, 0, 60_000L, null)
+            new AssignmentConfigs(0L, 1, 0, 60_000L)
         );
 
         assertThat(unstable, is(false));
@@ -210,7 +210,7 @@ public class HighAvailabilityTaskAssignorTest {
             clientStates,
             allTaskIds,
             allTaskIds,
-            new AssignmentConfigs(0L, 1, 0, 60_000L, null)
+            new AssignmentConfigs(0L, 1, 0, 60_000L)
         );
 
         assertThat(unstable, is(false));
@@ -239,7 +239,7 @@ public class HighAvailabilityTaskAssignorTest {
             clientStates,
             allTaskIds,
             allTaskIds,
-            new AssignmentConfigs(0L, 1, 0, 60_000L, null)
+            new AssignmentConfigs(0L, 1, 0, 60_000L)
         );
 
         assertThat(unstable, is(false));
@@ -261,7 +261,7 @@ public class HighAvailabilityTaskAssignorTest {
             clientStates,
             allTaskIds,
             allTaskIds,
-            new AssignmentConfigs(0L, 1, 0, 60_000L, null)
+            new AssignmentConfigs(0L, 1, 0, 60_000L)
         );
 
         assertThat(unstable, is(false));
@@ -286,7 +286,7 @@ public class HighAvailabilityTaskAssignorTest {
             clientStates,
             allTaskIds,
             allTaskIds,
-            new AssignmentConfigs(0L, allTaskIds.size() / 3 + 1, 0, 60_000L, null)
+            new AssignmentConfigs(0L, allTaskIds.size() / 3 + 1, 0, 60_000L)
         );
 
         assertThat(unstable, is(true));
@@ -316,7 +316,7 @@ public class HighAvailabilityTaskAssignorTest {
             clientStates,
             allTaskIds,
             allTaskIds,
-            new AssignmentConfigs(0L, allTaskIds.size() / 3 + 1, 0, 60_000L, null)
+            new AssignmentConfigs(0L, allTaskIds.size() / 3 + 1, 0, 60_000L)
         );
 
         assertThat(unstable, is(false));
@@ -337,7 +337,7 @@ public class HighAvailabilityTaskAssignorTest {
             clientStates,
             allTaskIds,
             allTaskIds,
-            new AssignmentConfigs(0L, 1, 0, 60_000L, null)
+            new AssignmentConfigs(0L, 1, 0, 60_000L)
         );
 
         assertThat(unstable, is(false));
@@ -490,8 +490,8 @@ public class HighAvailabilityTaskAssignorTest {
                 /*acceptableRecoveryLag*/ 100L,
                 /*maxWarmupReplicas*/ 1,
                 /*numStandbyReplicas*/ 0,
-                /*probingRebalanceIntervalMs*/ 60 * 1000L,
-                                          null)
+                /*probingRebalanceIntervalMs*/ 60 * 1000L
+            )
         );
 
 
@@ -518,8 +518,8 @@ public class HighAvailabilityTaskAssignorTest {
                 /*acceptableRecoveryLag*/ 100L,
                 /*maxWarmupReplicas*/ 1,
                 /*numStandbyReplicas*/ 1,
-                /*probingRebalanceIntervalMs*/ 60 * 1000L,
-                                          null)
+                /*probingRebalanceIntervalMs*/ 60 * 1000L
+            )
         );
 
         assertThat(client1.activeTasks(), equalTo(mkSet(TASK_0_0, TASK_0_1, TASK_0_2, TASK_0_3)));
@@ -697,7 +697,7 @@ public class HighAvailabilityTaskAssignorTest {
             clientStates,
             allTasks,
             statefulTasks,
-            new AssignmentConfigs(0L, 1, 0, 60_000L, null)
+            new AssignmentConfigs(0L, 1, 0, 60_000L)
         );
 
         assertValidAssignment(
@@ -728,7 +728,7 @@ public class HighAvailabilityTaskAssignorTest {
             clientStates,
             allTasks,
             statefulTasks,
-            new AssignmentConfigs(0L, 1, 0, 60_000L, null)
+            new AssignmentConfigs(0L, 1, 0, 60_000L)
         );
 
         assertValidAssignment(
@@ -759,7 +759,7 @@ public class HighAvailabilityTaskAssignorTest {
             clientStates,
             allTasks,
             statefulTasks,
-            new AssignmentConfigs(0L, 1, 0, 60_000L, null)
+            new AssignmentConfigs(0L, 1, 0, 60_000L)
         );
 
         assertValidAssignment(
@@ -790,7 +790,7 @@ public class HighAvailabilityTaskAssignorTest {
             clientStates,
             allTasks,
             statefulTasks,
-            new AssignmentConfigs(0L, 1, 0, 60_000L, null)
+            new AssignmentConfigs(0L, 1, 0, 60_000L)
         );
 
         assertValidAssignment(

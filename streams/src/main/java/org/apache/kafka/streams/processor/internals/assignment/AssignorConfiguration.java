@@ -23,7 +23,6 @@ import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.Utils;
-import org.apache.kafka.streams.RackStandbyTaskAssignor;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.StreamsConfig.InternalConfig;
 import org.apache.kafka.streams.processor.internals.ClientUtils;
@@ -184,7 +183,7 @@ public final class AssignorConfiguration {
     }
 
     public String rackId() {
-        return streamsConfig.getString(StreamsConfig.RACK_ID_CONFIG);
+        return streamsConfig.getString(StreamsConfig.RACK_AWARE_ASSIGNMENT_TAGS_CONFIG);
     }
 
     public InternalTopicManager internalTopicManager() {
@@ -236,26 +235,22 @@ public final class AssignorConfiguration {
         public final int maxWarmupReplicas;
         public final int numStandbyReplicas;
         public final long probingRebalanceIntervalMs;
-        public final RackStandbyTaskAssignor rackStandbyTaskAssignor;
 
         private AssignmentConfigs(final StreamsConfig configs) {
             acceptableRecoveryLag = configs.getLong(StreamsConfig.ACCEPTABLE_RECOVERY_LAG_CONFIG);
             maxWarmupReplicas = configs.getInt(StreamsConfig.MAX_WARMUP_REPLICAS_CONFIG);
             numStandbyReplicas = configs.getInt(StreamsConfig.NUM_STANDBY_REPLICAS_CONFIG);
             probingRebalanceIntervalMs = configs.getLong(StreamsConfig.PROBING_REBALANCE_INTERVAL_MS_CONFIG);
-            rackStandbyTaskAssignor = configs.getConfiguredInstance(StreamsConfig.RACK_STANDBY_TASK_ASSIGNOR_CLASS_CONFIG, RackStandbyTaskAssignor.class);
         }
 
         AssignmentConfigs(final Long acceptableRecoveryLag,
                           final Integer maxWarmupReplicas,
                           final Integer numStandbyReplicas,
-                          final Long probingRebalanceIntervalMs,
-                          final RackStandbyTaskAssignor rackStandbyTaskAssignor) {
+                          final Long probingRebalanceIntervalMs) {
             this.acceptableRecoveryLag = validated(StreamsConfig.ACCEPTABLE_RECOVERY_LAG_CONFIG, acceptableRecoveryLag);
             this.maxWarmupReplicas = validated(StreamsConfig.MAX_WARMUP_REPLICAS_CONFIG, maxWarmupReplicas);
             this.numStandbyReplicas = validated(StreamsConfig.NUM_STANDBY_REPLICAS_CONFIG, numStandbyReplicas);
             this.probingRebalanceIntervalMs = validated(StreamsConfig.PROBING_REBALANCE_INTERVAL_MS_CONFIG, probingRebalanceIntervalMs);
-            this.rackStandbyTaskAssignor = validated(StreamsConfig.RACK_STANDBY_TASK_ASSIGNOR_CLASS_CONFIG, rackStandbyTaskAssignor);
         }
 
         private static <T> T validated(final String configKey, final T value) {
@@ -273,7 +268,6 @@ public final class AssignorConfiguration {
                    "\n  maxWarmupReplicas=" + maxWarmupReplicas +
                    "\n  numStandbyReplicas=" + numStandbyReplicas +
                    "\n  probingRebalanceIntervalMs=" + probingRebalanceIntervalMs +
-                   "\n  standbyTaskAssignor=" + rackStandbyTaskAssignor +
                    "\n}";
         }
     }

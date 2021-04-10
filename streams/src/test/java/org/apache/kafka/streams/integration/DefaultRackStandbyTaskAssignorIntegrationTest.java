@@ -19,7 +19,6 @@ package org.apache.kafka.streams.integration;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.KeyValue;
-import org.apache.kafka.streams.DefaultRackStandbyTaskAssignor;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.Topology;
@@ -37,7 +36,6 @@ import org.apache.kafka.test.IntegrationTest;
 import org.apache.kafka.test.TestCondition;
 import org.apache.kafka.test.TestUtils;
 import org.junit.After;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
@@ -56,9 +54,6 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static org.apache.kafka.common.utils.Utils.mkEntry;
-import static org.apache.kafka.common.utils.Utils.mkMap;
-import static org.apache.kafka.common.utils.Utils.mkSet;
 import static org.apache.kafka.streams.integration.utils.IntegrationTestUtils.safeUniqueTestName;
 
 @Category({IntegrationTest.class})
@@ -117,24 +112,24 @@ public class DefaultRackStandbyTaskAssignorIntegrationTest {
 
     @Test
     public void doStuff() {
-        final DefaultRackStandbyTaskAssignor standbyTaskAssignor = new DefaultRackStandbyTaskAssignor();
-        final Map<TaskId, String> taskAndRacks = mkMap(
-            mkEntry(TASK_0_0, "rack1"),
-            mkEntry(TASK_0_1, "rack1"),
-            mkEntry(TASK_0_2, "rack1"),
-            mkEntry(TASK_0_3, "rack2"),
-            mkEntry(TASK_0_4, "rack2")
-        );
-
-        final Set<String> clientRackIds = mkSet(
-            "rack1",
-            "rack2",
-            "rack3"
-        );
-
-        final Map<String, Set<TaskId>> tldr = standbyTaskAssignor.computeStandbyTaskDistribution(taskAndRacks, clientRackIds);
-        final String a = "";
-        Assert.assertTrue(true);
+//        final DefaultRackStandbyTaskAssignor standbyTaskAssignor = new DefaultRackStandbyTaskAssignor();
+//        final Map<TaskId, String> taskAndRacks = mkMap(
+//            mkEntry(TASK_0_0, "rack1"),
+//            mkEntry(TASK_0_1, "rack1"),
+//            mkEntry(TASK_0_2, "rack1"),
+//            mkEntry(TASK_0_3, "rack2"),
+//            mkEntry(TASK_0_4, "rack2")
+//        );
+//
+//        final Set<String> clientRackIds = mkSet(
+//            "rack1",
+//            "rack2",
+//            "rack3"
+//        );
+//
+//        final Map<String, Set<TaskId>> tldr = standbyTaskAssignor.computeStandbyTaskDistribution(taskAndRacks, clientRackIds);
+//        final String a = "";
+//        Assert.assertTrue(true);
     }
 
     @Test
@@ -208,7 +203,7 @@ public class DefaultRackStandbyTaskAssignorIntegrationTest {
     private Map<String, List<KafkaStreams>> createKafkaStreams(final Topology topology, final Properties... streamsConfigs) {
         final Map<String, List<KafkaStreams>> kafkaStreamsByRackId = Arrays
             .stream(streamsConfigs)
-            .map(streamsConfig -> new KStreamRackIdPair(streamsConfig.get(StreamsConfig.RACK_ID_CONFIG).toString(),
+            .map(streamsConfig -> new KStreamRackIdPair(streamsConfig.get(StreamsConfig.RACK_AWARE_ASSIGNMENT_TAGS_CONFIG).toString(),
                                                         new KafkaStreams(topology, streamsConfig)))
             .collect(
                 Collectors.groupingBy(
@@ -230,7 +225,7 @@ public class DefaultRackStandbyTaskAssignorIntegrationTest {
         final Properties streamsConfiguration = new Properties();
         streamsConfiguration.putAll(baseConfiguration);
         streamsConfiguration.put(StreamsConfig.NUM_STANDBY_REPLICAS_CONFIG, numStandbyReplicas);
-        streamsConfiguration.put(StreamsConfig.RACK_ID_CONFIG, rackId);
+        streamsConfiguration.put(StreamsConfig.RACK_AWARE_ASSIGNMENT_TAGS_CONFIG, rackId);
         return streamsConfiguration;
     }
 

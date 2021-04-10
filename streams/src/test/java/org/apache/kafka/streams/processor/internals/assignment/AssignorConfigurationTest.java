@@ -29,7 +29,7 @@ public class AssignorConfigurationTest {
     public void configsShouldRejectZeroWarmups() {
         final ConfigException exception = assertThrows(
             ConfigException.class,
-            () -> new AssignorConfiguration.AssignmentConfigs(1L, 0, 1, 1L, null)
+            () -> new AssignorConfiguration.AssignmentConfigs(1L, 0, 1, 1L)
         );
 
         assertThat(exception.getMessage(), containsString("Invalid value 0 for configuration max.warmup.replicas"));

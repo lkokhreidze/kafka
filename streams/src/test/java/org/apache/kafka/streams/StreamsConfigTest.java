@@ -973,16 +973,16 @@ public class StreamsConfigTest {
     }
 
     @Test
-    public void shouldDefaultToNullIfRackIdIsNotSpecified() {
+    public void shouldDefaultToNullIfRackAwareAssignmentTagsIsNotSpecified() {
         final StreamsConfig streamsConfig = new StreamsConfig(props);
-        assertNull(streamsConfig.getString(StreamsConfig.RACK_ID_CONFIG));
+        assertNull(streamsConfig.getString(StreamsConfig.RACK_AWARE_ASSIGNMENT_TAGS_CONFIG));
     }
 
     @Test
-    public void shouldAllowToSpecifyRackId() {
-        props.put(StreamsConfig.RACK_ID_CONFIG, "cluster-1");
+    public void shouldAllowToSpecifyRackAwareAssignmentTags() {
+        props.put(StreamsConfig.RACK_AWARE_ASSIGNMENT_TAGS_CONFIG, "cluster,zone");
         final StreamsConfig config = new StreamsConfig(props);
-        assertEquals(config.getString(StreamsConfig.RACK_ID_CONFIG), "cluster-1");
+        assertEquals(config.getString(StreamsConfig.RACK_AWARE_ASSIGNMENT_TAGS_CONFIG), "cluster,zone");
     }
 
     static class MisconfiguredSerde implements Serde<Object> {

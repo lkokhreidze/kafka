@@ -211,6 +211,15 @@ public class StreamsConfig extends AbstractConfig {
     public static final String ADMIN_CLIENT_PREFIX = "admin.";
 
     /**
+     * Prefix used to add arbitrary tags to a Kafka Stream's instance as key-value pairs.
+     * Example:
+     * client.tag.zone=zone1
+     * client.tag.cluster=cluster1
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String CLIENT_TAG_PREFIX = "client.tag.";
+
+    /**
      * Config value for parameter {@link #TOPOLOGY_OPTIMIZATION_CONFIG "topology.optimization"} for disabling topology optimization
      */
     public static final String NO_OPTIMIZATION = "none";
@@ -471,14 +480,12 @@ public class StreamsConfig extends AbstractConfig {
         "recommended setting for production; for development you can change this, by adjusting broker setting " +
         "<code>transaction.state.log.replication.factor</code> and <code>transaction.state.log.min.isr</code>.";
 
-    public static final String RACK_ID_CONFIG = "rack.id";
-    private static final String RACK_ID_DOC = "An identifier for the rack of an instance of Kafka Streams. " +
-                                              "When set, the default implementation of org.apache.kafka.streams.StandbyTaskDistributor of the Kafka Streams " +
-                                              "will try to distribute standby tasks in different rack compared to corresponding active task.";
-
-    public static final String RACK_STANDBY_TASK_ASSIGNOR_CLASS_CONFIG = "rack.standby.task.assignor";
-    public static final String RACK_STANDBY_TASK_ASSIGNOR_CLASS_DOC = "Class that implements RackStandbyTaskAssignor interface, " +
-                                                                      "that is used when deciding on which racks standby tasks can be created.";
+    /** {@code rack.aware.assignment.tags} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String RACK_AWARE_ASSIGNMENT_TAGS_CONFIG = "rack.aware.assignment.tags";
+    private static final String RACK_AWARE_ASSIGNMENT_TAGS_DOC = "List of client tag keys used to distribute standby replicas across Kafka Streams instances." +
+                                                                 " When configured, Kafka Streams will make a best-effort to distribute" +
+                                                                 " the standby tasks over each client tag dimension.";
 
     /** {@code receive.buffer.bytes} */
     @SuppressWarnings("WeakerAccess")
@@ -694,6 +701,10 @@ public class StreamsConfig extends AbstractConfig {
                     in(AT_LEAST_ONCE, EXACTLY_ONCE, EXACTLY_ONCE_BETA),
                     Importance.MEDIUM,
                     PROCESSING_GUARANTEE_DOC)
+            .define(RACK_AWARE_ASSIGNMENT_TAGS_CONFIG,
+                    Type.STRING,
+                    Importance.MEDIUM,
+                    RACK_AWARE_ASSIGNMENT_TAGS_DOC)
             .define(SECURITY_PROTOCOL_CONFIG,
                     Type.STRING,
                     CommonClientConfigs.DEFAULT_SECURITY_PROTOCOL,
@@ -784,16 +795,6 @@ public class StreamsConfig extends AbstractConfig {
                     atLeast(60 * 1000L),
                     Importance.LOW,
                     PROBING_REBALANCE_INTERVAL_MS_DOC)
-            .define(RACK_ID_CONFIG,
-                    Type.STRING,
-                    null,
-                    Importance.LOW,
-                    RACK_ID_DOC)
-            .define(RACK_STANDBY_TASK_ASSIGNOR_CLASS_CONFIG,
-                    Type.CLASS,
-                    DefaultRackStandbyTaskAssignor.class.getName(),
-                    Importance.LOW,
-                    RACK_STANDBY_TASK_ASSIGNOR_CLASS_DOC)
             .define(RECEIVE_BUFFER_CONFIG,
                     Type.INT,
                     32 * 1024,
@@ -993,6 +994,16 @@ public class StreamsConfig extends AbstractConfig {
     @SuppressWarnings("WeakerAccess")
     public static String adminClientPrefix(final String adminClientProp) {
         return ADMIN_CLIENT_PREFIX + adminClientProp;
+    }
+
+    /**
+     * Prefix a client tag key with {@link #CLIENT_TAG_PREFIX}.
+     *
+     * @param clientTagKey client tag key
+     * @return {@link #CLIENT_TAG_PREFIX} + {@code clientTagKey}
+     */
+    public static String clientTagPrefix(final String clientTagKey) {
+        return CLIENT_TAG_PREFIX + clientTagKey;
     }
 
     /**
@@ -1199,7 +1210,7 @@ public class StreamsConfig extends AbstractConfig {
         consumerProps.put(PROBING_REBALANCE_INTERVAL_MS_CONFIG, getLong(PROBING_REBALANCE_INTERVAL_MS_CONFIG));
         consumerProps.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG, StreamsPartitionAssignor.class.getName());
         consumerProps.put(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG, getLong(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG));
-        consumerProps.put(RACK_ID_CONFIG, getString(RACK_ID_CONFIG));
+        consumerProps.put(RACK_AWARE_ASSIGNMENT_TAGS_CONFIG, getString(RACK_AWARE_ASSIGNMENT_TAGS_CONFIG));
 
         // disable auto topic creation
         consumerProps.put(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, "false");
